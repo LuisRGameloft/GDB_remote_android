@@ -15,10 +15,8 @@ g_android_package           = os.environ['ANDROID_PACKAGE_ID']
 g_android_main_activity     = os.environ['MAIN_ACTIVITY']
 g_arch_device               = os.environ['ARCH_DEVICE']
 g_java_sdk_path             = os.environ['JAVA_SDK_PATH']
+g_android_ndk_path          = os.environ['ANDROID_NDK_PATH']
 g_current_working_path      = os.getcwd()
-g_LLDB_working_path         = os.path.join(g_current_working_path, 'LLDB')
-#g_android_repository_url    = 'https://dl.google.com/android/repository/'
-#g_lldb_tool                 = 'lldb-3.1.4508709-windows.zip'
 g_current_miliseconds       = str(int(round(time.time() * 1000)))
 
 def destroy_previous_session_debugger(task):
@@ -113,41 +111,15 @@ def main():
         print "Error: device disconnected!"
         return -1
 
-    #Check for LLDB tool
-    #if not os.path.exists(os.path.join(g_LLDB_working_path, 'bin', 'LLDBFrontend.exe')):
-    #    print "LLDB doesn't exists, Downloading Android LLDB tool ... "
-    #    LLDB_zip_file = os.path.join(g_current_working_path, g_lldb_tool)
-    #    urllib.urlretrieve (g_android_repository_url + g_lldb_tool, LLDB_zip_file)
-    #    print "Downloaded!!! , Uncompressing ... "
-        
-        #Check for LLDB paths
-    #    LLDB_path = os.path.join(g_current_working_path, 'LLDB')
-    #    if not os.path.exists(LLDB_path):
-    #        os.mkdir(LLDB_path)
-
-    #    LLDB_path = os.path.join(LLDB_path, 'Windows')
-    #    if not os.path.exists(LLDB_path):
-    #        os.mkdir(LLDB_path)
-
-    #    LLDB_zip = zipfile.ZipFile(LLDB_zip_file)
-    #    LLDB_zip.extractall(g_LLDB_working_path)
-    #    LLDB_zip.close()
-    #    print "Downloaded!!! , Uncompressing ... Done"
-
-    destroy_previous_session_debugger("/data/data/" + g_android_package + "/lldb/bin/lldb-server")
+    #destroy_previous_session_debugger("/data/data/" + g_android_package + "/lldb/bin/lldb-server")
 
     print "Install LLDB files into device"
     
     #Install LLDB Server
-    lldb_server_name    = 'lldb-server' 
-    lldb_server_path    = os.path.join(g_LLDB_working_path, 'android', g_arch_device, lldb_server_name)
-    command = g_adb_tool + ' push ' + lldb_server_path + ' /data/local/tmp/' + lldb_server_name
-    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
-
-    #Install LLDB Script
-    lldb_server_script  = 'start_lldb_server.sh'
-    lldb_server_script_path  = os.path.join(g_LLDB_working_path, 'android', lldb_server_script)
-    command = g_adb_tool + ' push ' + lldb_server_script_path + ' /data/local/tmp/' + lldb_server_script
+    gdb_server_name    = "{}-gdbserver".format(g_arch_device)
+    gdb_subfolder_path = "android-{}".format(g_arch_device)
+    gdb_server_path    = os.path.join(g_android_ndk_path, 'prebuilt', gdb_subfolder_path, 'gdbserver', 'gdbserver')
+    command = g_adb_tool + ' push ' + gdb_server_path + ' /data/local/tmp/' + gdb_server_name
     subprocess.Popen(command, stdout=subprocess.PIPE).wait()
 
     #Stop Current APP session
@@ -158,25 +130,22 @@ def main():
     command = g_adb_tool + ' shell am start -n "' + g_android_package + '/' + g_android_main_activity + '" -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -D'
     subprocess.Popen(command, stdout=subprocess.PIPE).wait()
 
-    #Create LLDB folders into device /data/data/<package-id>/lldb and ~/lldb/bin
-    command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'mkdir /data/data/" + g_android_package + "/lldb; mkdir /data/data/" + g_android_package + "/lldb/bin'"
+    #Create LLDB folders into device /data/data/<package-id>/gdb and ~/gdb/bin
+    command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'mkdir /data/data/" + g_android_package + "/gdb; mkdir /data/data/" + g_android_package + "/gdb/bin'"
     subprocess.Popen(command, stdout=subprocess.PIPE).wait()
 
-    print "/data/data/" + g_android_package + "/lldb"
-    
-    #Install lldbserver into package folder /data/data/<package-id>/lldb/bin
-    command = g_adb_tool + " shell \"cat /data/local/tmp/lldb-server | run-as " + g_android_package + " sh -c 'cat > /data/data/" + g_android_package + "/lldb/bin/lldb-server && chmod 700 /data/data/" + g_android_package + "/lldb/bin/lldb-server'\""
+    #Install gdbserver into package folder /data/data/<package-id>/gdb/bin
+    command = g_adb_tool + " shell \"cat /data/local/tmp/" + gdb_server_name + " | run-as " + g_android_package + " sh -c 'cat > /data/data/" + g_android_package + "/gdb/bin/" + gdb_server_name + " && chmod 700 /data/data/" + g_android_package + "/gdb/bin/" + gdb_server_name + "'\""
     subprocess.Popen(command, stdout=subprocess.PIPE).wait()
     
-    #Install start_lldb_server.sh script into package folder /data/data/<package-id>/lldb/bin
-    command = g_adb_tool + " shell \"cat /data/local/tmp/start_lldb_server.sh | run-as " + g_android_package + " sh -c 'cat > /data/data/" + g_android_package + "/lldb/bin/start_lldb_server.sh && chmod 700 /data/data/" + g_android_package + "/lldb/bin/start_lldb_server.sh'\""
-    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
-    
-    #start start_lldb_server.sh script into package folder /data/data/<package-id>/lldb/bin
+    #start gbserver into package folder /data/data/<package-id>/gdb/bin
     print "Debugger is running ..."
-    command = g_adb_tool + " shell run-as " + g_android_package + " sh -c '/data/data/" + g_android_package + "/lldb/bin/start_lldb_server.sh /data/data/" + g_android_package + "/lldb unix-abstract /" + g_android_package + "-0 platform-" + g_current_miliseconds + ".sock \"lldb process:gdb-remote packets\"'"
+    command = g_adb_tool + " shell run-as " + g_android_package + " sh -c '/data/data/" + g_android_package + "/gdb/bin/" + gdb_server_name + "'"
     debugger_process = subprocess.Popen(command, stdout=subprocess.PIPE)
-    
+    print command
+
+    return 0
+
     # Get Current PID for current debugger session
     command = g_adb_tool + " jdwp"
     process_jdwp = subprocess.Popen(command, stdout=subprocess.PIPE)
@@ -192,6 +161,8 @@ def main():
     #read dummy first line this is "List of devices attached" string
     process_device_name.stdout.readline()
     device_name = process_device_name.stdout.readline().split()[0]
+
+    return 0
 
     #Create script_commands for LLDB
     command_working_lldb = "platform select remote-android\n"
