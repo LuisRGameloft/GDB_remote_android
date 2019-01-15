@@ -1,0 +1,20 @@
+REM Setup all tools
+@echo off
+
+REM Set name of Android Package. Eg. com.xx.xx
+set ANDROID_PACKAGE_ID=
+
+REM Set name of Main Activity 
+set MAIN_ACTIVITY=
+
+REM Set Path of ADB tool 
+set ADB_PATH=
+
+REM Set Path of Python Framework 
+set PYTHON_PATH=
+
+REM Set Architecture of device armeabi, arm64-v8a, x86, x86_64
+set ARCH_DEVICE=
+
+REM Set Java SDK Path
+set JAVA_SDK_PATH=
