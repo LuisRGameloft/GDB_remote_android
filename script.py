@@ -19,6 +19,10 @@ g_android_ndk_path          = os.environ['ANDROID_NDK_PATH']
 g_current_working_path      = os.getcwd()
 g_current_miliseconds       = str(int(round(time.time() * 1000)))
 
+#g_binaryWorkingPath         = os.path.join(g_android_ndk_path, 'prebuilt', 'windows-x86_64', 'bin')
+#os.environ['PYTHONPATH'] = str(g_binaryWorkingPath)
+#os.environ['PYTHONHOME'] = str(g_binaryWorkingPath)
+
 def destroy_previous_session_debugger(task):
     command = g_adb_tool + " shell ps"
     proc = subprocess.Popen(command, stdout=subprocess.PIPE)
@@ -163,23 +167,46 @@ def main():
     
     #Create script_commands for LLDB
     command_working_gdb = "set osabi GNU/Linux\n"
-    command_working_gdb = "target remote:5039\n"
-    
-#    command_working_lldb += """
-#script
-#def start_jdb_to_unblock_app():
-#  import subprocess
-#  subprocess.Popen({})
-#start_jdb_to_unblock_app()
-#    """.format(repr(
-#            [
-#                sys.executable,
-#                os.path.realpath(__file__),
-#                "--wakeup",
-#                g_adb_tool,
-#                g_java_sdk_path,
-#                current_pid,
-#            ]))
+    command_working_gdb +="shell echo Connectiing \r\n"
+    command_working_gdb += """
+python
+
+def target_remote_with_retry(target, timeout_seconds):
+  import time
+  end_time = time.time() + timeout_seconds
+  while True:
+    try:
+      gdb.execute('target remote ' + target)
+      return True
+    except gdb.error as e:
+      time_left = end_time - time.time()
+      if time_left < 0 or time_left > timeout_seconds:
+        print("Error: unable to connect to device.")
+        print(e)
+        return False
+      time.sleep(min(0.25, time_left))
+
+target_remote_with_retry(':{}', {})
+
+end
+""".format(5039, 5)    
+
+    command_working_gdb += """
+python
+def start_jdb_to_unblock_app():
+  import subprocess
+  subprocess.Popen({})
+start_jdb_to_unblock_app()
+end
+    """.format(repr(
+            [
+                sys.executable,
+                os.path.realpath(__file__),
+                "--wakeup",
+                g_adb_tool,
+                g_java_sdk_path,
+                current_pid,
+            ]))
 
     #Create Tmp file
     gdb_script_fd, gdb_script_path = tempfile.mkstemp()
