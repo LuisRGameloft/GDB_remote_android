@@ -111,12 +111,13 @@ def main():
         print "Error: device disconnected!"
         return -1
 
-    #destroy_previous_session_debugger("/data/data/" + g_android_package + "/lldb/bin/lldb-server")
-
-    print "Install LLDB files into device"
-    
-    #Install LLDB Server
     gdb_server_name    = "{}-gdbserver".format(g_arch_device)
+    
+    destroy_previous_session_debugger(gdb_server_name)
+    
+    print "Install GDB files into device"
+    
+    #Install GDB Server
     gdb_subfolder_path = "android-{}".format(g_arch_device)
     gdb_server_path    = os.path.join(g_android_ndk_path, 'prebuilt', gdb_subfolder_path, 'gdbserver', 'gdbserver')
     command = g_adb_tool + ' push ' + gdb_server_path + ' /data/local/tmp/' + gdb_server_name
@@ -130,6 +131,19 @@ def main():
     command = g_adb_tool + ' shell am start -n "' + g_android_package + '/' + g_android_main_activity + '" -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -D'
     subprocess.Popen(command, stdout=subprocess.PIPE).wait()
 
+    #Wait for one second
+    time.sleep(1)
+
+    # Get Current PID for current debugger session
+    command = g_adb_tool + " shell ps | grep " + g_android_package
+    process = subprocess.Popen(command, stdout=subprocess.PIPE)
+    process.wait()
+    str = process.stdout.readline()
+    if len(str) is 0:
+        print "Not instance of " + g_android_package + " was found"
+        return 0
+    current_pid = filter(None, str.split(" "))[1]
+    
     #Create LLDB folders into device /data/data/<package-id>/gdb and ~/gdb/bin
     command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'mkdir /data/data/" + g_android_package + "/gdb; mkdir /data/data/" + g_android_package + "/gdb/bin'"
     subprocess.Popen(command, stdout=subprocess.PIPE).wait()
@@ -140,38 +154,17 @@ def main():
     
     #start gbserver into package folder /data/data/<package-id>/gdb/bin
     print "Debugger is running ..."
-    command = g_adb_tool + " shell run-as " + g_android_package + " sh -c '/data/data/" + g_android_package + "/gdb/bin/" + gdb_server_name + "'"
-    debugger_process = subprocess.Popen(command, stdout=subprocess.PIPE)
-    print command
+    command = g_adb_tool + " shell \"run-as " + g_android_package + " sh -c '/data/data/" + g_android_package + "/gdb/bin/" + gdb_server_name + " :5039 --attach " + current_pid  + "'\""
+    debugger_process = subprocess.Popen(command, stdout=subprocess.PIPE, creationflags=subprocess.CREATE_NEW_CONSOLE)
 
-    return 0
-
-    # Get Current PID for current debugger session
-    command = g_adb_tool + " jdwp"
-    process_jdwp = subprocess.Popen(command, stdout=subprocess.PIPE)
-    #Wait for 1/2 second
-    time.sleep(0.5)
-    current_pid = process_jdwp.stdout.readline()
-    #Kill the current jdwp command
-    os.kill(process_jdwp.pid, signal.SIGTERM)
-
-    # Get Current Device's name connected
-    command = g_adb_tool + " devices"
-    process_device_name = subprocess.Popen(command, stdout=subprocess.PIPE)
-    #read dummy first line this is "List of devices attached" string
-    process_device_name.stdout.readline()
-    device_name = process_device_name.stdout.readline().split()[0]
-
-    return 0
-
+    #Forward port 
+    command = g_adb_tool + " forward tcp:5039 tcp:5039"
+    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
+    
     #Create script_commands for LLDB
-    command_working_lldb = "platform select remote-android\n"
-    command_working_lldb += "platform connect unix-abstract-connect://" + device_name + "/" + g_android_package + "-0/platform-" + g_current_miliseconds + ".sock\n"
-    command_working_lldb += "settings set auto-confirm true\n"
-    command_working_lldb += "settings set plugin.symbol-file.dwarf.comp-dir-symlink-paths /proc/self/cwd\n"
-    command_working_lldb += "settings set plugin.jit-loader.gdb.enable-jit-breakpoint true\n"
-    command_working_lldb += "command alias fv frame variable\n"
-    command_working_lldb += "attach -p " + current_pid + "\n"
+    command_working_gdb = "set osabi GNU/Linux\n"
+    command_working_gdb = "target remote:5039\n"
+    
 #    command_working_lldb += """
 #script
 #def start_jdb_to_unblock_app():
@@ -189,13 +182,13 @@ def main():
 #            ]))
 
     #Create Tmp file
-    lldb_script_fd, lldb_script_path = tempfile.mkstemp()
-    os.write(lldb_script_fd, command_working_lldb)
-    os.close(lldb_script_fd)
+    gdb_script_fd, gdb_script_path = tempfile.mkstemp()
+    os.write(gdb_script_fd, command_working_gdb)
+    os.close(gdb_script_fd)
 
-    lldb_tool_path = os.path.join(g_LLDB_working_path, 'bin', 'lldb.exe')
+    gdb_tool_path = os.path.join(g_android_ndk_path, 'prebuilt', 'windows-x86_64', 'bin' , 'gdb.exe')
     #Attach to LLDB
-    lldb_process = subprocess.Popen(lldb_tool_path + " -s " + lldb_script_path, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    lldb_process = subprocess.Popen(gdb_tool_path + " -x " + gdb_script_path, creationflags=subprocess.CREATE_NEW_CONSOLE)
     while lldb_process.returncode is None:
         try:
             lldb_process.communicate()
