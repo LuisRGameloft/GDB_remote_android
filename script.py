@@ -10,24 +10,55 @@ import multiprocessing
 import tempfile
 import re
 
-g_adb_tool                  = os.path.join(os.environ['ADB_PATH'], 'adb.exe')
-g_android_package           = os.environ['ANDROID_PACKAGE_ID']
-g_android_main_activity     = os.environ['MAIN_ACTIVITY']
-g_arch_device               = os.environ['ARCH_DEVICE']
-g_java_sdk_path             = os.environ['JAVA_SDK_PATH']
-g_android_ndk_path          = os.environ['ANDROID_NDK_PATH']
-g_current_working_path      = os.getcwd()
-g_current_miliseconds       = str(int(round(time.time() * 1000)))
+def find_program(program, path, withext=True):
+    exts = [""]
+    if sys.platform.startswith("win"):
+        exts += [".exe", ".bat", ".cmd"]
+    
+    for x in os.walk(path):
+        if os.path.isdir(x[0]):
+            if withext:
+                for ext in exts:
+                    full = x[0] + os.sep + program + ext
+                    if os.path.isfile(full):
+                        return full
+            else:
+                full = x[0] + os.sep + program
+                if os.path.isfile(full):
+                    return full
 
-#g_binaryWorkingPath         = os.path.join(g_android_ndk_path, 'prebuilt', 'windows-x86_64', 'bin')
-#os.environ['PYTHONPATH'] = str(g_binaryWorkingPath)
-#os.environ['PYTHONHOME'] = str(g_binaryWorkingPath)
+    print "Cannot find Program : " + program + " in path = " + path
+    exit()
+
+if sys.argv[1:2] != ["--wakeup"]:
+    print "Finding adb tool ..."
+    g_adb_tool                  = find_program("adb", os.environ['ADB_PATH'])
+    print "Finding jdb tool ..."
+    g_jdb_tool                  = find_program("jdb", os.environ['JAVA_SDK_PATH'])
+    print "Finding gdb tool ..."
+    g_gdb_tool                  = find_program("gdb", os.environ['ANDROID_NDK_PATH'])
+    g_android_package           = os.environ['ANDROID_PACKAGE_ID']
+    g_android_main_activity     = os.environ['MAIN_ACTIVITY']
+
+
+def run_command(command):
+    p = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = p.communicate()
+    exit_code = p.returncode
+    if exit_code != 0:
+        print "Command : " + command 
+        print "Is not valid" 
+        print "if this error persist, please reboot device"
+        exit()
+
+    return stdout, stderr
 
 def destroy_previous_session_debugger(task):
     command = g_adb_tool + " shell ps"
-    proc = subprocess.Popen(command, stdout=subprocess.PIPE)
-    output_str, _ = proc.communicate()
-    lines = re.split(r'[\r\n]+', output_str.replace("\r", "").rstrip())
+    stdout, stderr = run_command(command)
+
+    lines = re.split(r'[\r\n]+', stdout.replace("\r", "").rstrip())
     columns = lines.pop(0).split()
     
     try:
@@ -36,27 +67,24 @@ def destroy_previous_session_debugger(task):
         pid_column = 1
 
     processes = dict()
+    PIDS = []
     while lines:
         columns = lines.pop().split()
         process_name = columns[-1]
         pid = columns[pid_column]
-        if process_name in processes:
-            processes[process_name].append(pid)
-        else:
-            processes[process_name] = [pid]
 
-    PIDS = processes.get(task, [])
+        if task in process_name:
+            PIDS.append(pid)
+
     if PIDS:
         print "Destroying previous LLDB server sessions"
         for pid in PIDS:
             print "Killing processes: " + pid
-            command = g_adb_tool + " shell run-as " + g_android_package + " kill -9 " + pid 
-            subprocess.Popen(command).wait()
-    
-    return 0
+            command = g_adb_tool + " shell run-as " + g_android_package + " kill -9 " + pid
+            stdout, stderr = run_command(command)
 
 
-def start_jdb(adb_tool, sdk_path, pid):
+def start_jdb(adb_tool, jdb_tool, pid):
     print "Starting jdb to unblock application."
 
     # Do setup stuff to keep ^C in the parent from killing us.
@@ -65,11 +93,10 @@ def start_jdb(adb_tool, sdk_path, pid):
     # Wait until gdbserver has interrupted the program.
     time.sleep(0.5)
 
-    jdb_port = 65534
     command = adb_tool + " -d forward tcp:65534 jdwp:" + pid
-    subprocess.Popen(command, stdout=subprocess.PIPE)
+    stdout, stderr = run_command(command)
 
-    jdb_cmd = os.path.join(sdk_path, 'bin', 'jdb.exe') + " -connect com.sun.jdi.SocketAttach:hostname=localhost,port=65534"
+    jdb_cmd = jdb_tool + " -connect com.sun.jdi.SocketAttach:hostname=localhost,port=65534"
     flags = subprocess.CREATE_NEW_PROCESS_GROUP
     jdb = subprocess.Popen(jdb_cmd,
                            stdin=subprocess.PIPE,
@@ -104,18 +131,37 @@ def main():
 
     #Check if device is connected
     command = g_adb_tool + " devices"
-    process = subprocess.Popen(command, stdout=subprocess.PIPE)
-    output, _ = process.communicate()
-    lines = re.split(r'[\r\n]+', output.replace("\r", "").rstrip())
+    stdout, stderr = run_command(command)
+
+    lines = re.split(r'[\r\n]+', stdout.replace("\r", "").rstrip())
     if len(lines) < 2:
         print "Error: device disconnected!"
-        return -1
+        exit()
     
     if not "device" in lines[1]:
         print "Error: device disconnected!"
-        return -1
+        exit()
 
-    gdb_server_name    = "{}-gdbserver".format(g_arch_device)
+    #Detect ABI's device
+    #Stop Current APP session
+    command = g_adb_tool + ' shell getprop ro.product.cpu.abi '
+    stdout, stderr = run_command(command)
+
+    detectABI = stdout
+
+    #default ABI
+    g_arch_device = "arm"
+    #Select ABI 
+    if detectABI.lower() == 'arm64-v8a':
+        g_arch_device = 'arm64'
+
+    if detectABI.lower() == 'x86':
+        g_arch_device = 'x86'
+
+    if detectABI.lower() == 'x86_64':
+        g_arch_device = 'x86_64'
+
+    gdb_server_name = "{}-gdbserver".format(g_arch_device)
     
     destroy_previous_session_debugger(gdb_server_name)
     
@@ -123,51 +169,62 @@ def main():
     
     #Install GDB Server
     gdb_subfolder_path = "android-{}".format(g_arch_device)
-    gdb_server_path    = os.path.join(g_android_ndk_path, 'prebuilt', gdb_subfolder_path, 'gdbserver', 'gdbserver')
+    gdb_server_path = find_program("gdbserver", os.path.join(os.environ['ANDROID_NDK_PATH'], 'prebuilt', gdb_subfolder_path), False)
     command = g_adb_tool + ' push ' + gdb_server_path + ' /data/local/tmp/' + gdb_server_name
-    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
-
+    stdout, stderr = run_command(command)
+    
     #Stop Current APP session
     command = g_adb_tool + ' shell am force-stop ' + g_android_package
-    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
-
+    stdout, stderr = run_command(command)
+    
     #Start Current APP session
     command = g_adb_tool + ' shell am start -n "' + g_android_package + '/' + g_android_main_activity + '" -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -D'
-    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
-
+    stdout, stderr = run_command(command)
+    
     #Wait for one second
     time.sleep(1)
 
     # Get Current PID for current debugger session
     command = g_adb_tool + " shell ps | grep " + g_android_package
-    process = subprocess.Popen(command, stdout=subprocess.PIPE)
-    process.wait()
-    str = process.stdout.readline()
+    stdout, stderr = run_command(command)
+    str = stdout
     if len(str) is 0:
         print "Not instance of " + g_android_package + " was found"
-        return 0
+        exit()
     current_pid = filter(None, str.split(" "))[1]
     
-    #Create LLDB folders into device /data/data/<package-id>/gdb and ~/gdb/bin
-    command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'mkdir /data/data/" + g_android_package + "/gdb; mkdir /data/data/" + g_android_package + "/gdb/bin'"
-    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
+    #check if exist folder /data/data/<package-id>/gdb 
+    command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'if [ -d \"/data/data/" + g_android_package + "/gdb\" ]; then echo \"1\"; else echo \"0\"; fi;'"
+    stdout, stderr = run_command(command)
+    if stdout.strip() == '0':
+        #Create LLDB folders into device /data/data/<package-id>/gdb 
+        command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'mkdir /data/data/" + g_android_package + "/gdb'"
+        stdout, stderr = run_command(command)
+
+    #check if exist folder /data/data/<package-id>/gdb/bin
+    command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'if [ -d \"/data/data/" + g_android_package + "/gdb/bin\" ]; then echo \"1\"; else echo \"0\"; fi;'"
+    stdout, stderr = run_command(command)
+    if stdout.strip() == '0':
+        #Create LLDB folders into device /data/data/<package-id>/gdb/bin
+        command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'mkdir /data/data/" + g_android_package + "/gdb/bin'"
+        stdout, stderr = run_command(command)
 
     #Install gdbserver into package folder /data/data/<package-id>/gdb/bin
     command = g_adb_tool + " shell \"cat /data/local/tmp/" + gdb_server_name + " | run-as " + g_android_package + " sh -c 'cat > /data/data/" + g_android_package + "/gdb/bin/" + gdb_server_name + " && chmod 700 /data/data/" + g_android_package + "/gdb/bin/" + gdb_server_name + "'\""
-    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
+    stdout, stderr = run_command(command)
     
     #start gbserver into package folder /data/data/<package-id>/gdb/bin
     print "Debugger is running ..."
     command = g_adb_tool + " shell \"run-as " + g_android_package + " sh -c '/data/data/" + g_android_package + "/gdb/bin/" + gdb_server_name + " :5039 --attach " + current_pid  + "'\""
-    debugger_process = subprocess.Popen(command, stdout=subprocess.PIPE, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    subprocess.Popen(command, stdout=subprocess.PIPE, creationflags=subprocess.CREATE_NEW_CONSOLE)
 
     #Forward port 
     command = g_adb_tool + " forward tcp:5039 tcp:5039"
-    subprocess.Popen(command, stdout=subprocess.PIPE).wait()
+    stdout, stderr = run_command(command)
     
     #Create script_commands for LLDB
     command_working_gdb = "set osabi GNU/Linux\n"
-    command_working_gdb +="shell echo Connectiing \r\n"
+    command_working_gdb +="shell echo Connecting .. \r\n"
     command_working_gdb += """
 python
 
@@ -196,33 +253,36 @@ python
 def start_jdb_to_unblock_app():
   import subprocess
   subprocess.Popen({})
+
 start_jdb_to_unblock_app()
+
 end
-    """.format(repr(
+""".format(repr(
             [
-                sys.executable,
+                "python",
                 os.path.realpath(__file__),
                 "--wakeup",
                 g_adb_tool,
-                g_java_sdk_path,
+                g_jdb_tool,
                 current_pid,
             ]))
+    
+    command_working_gdb +="continue \r\n"
 
     #Create Tmp file
     gdb_script_fd, gdb_script_path = tempfile.mkstemp()
     os.write(gdb_script_fd, command_working_gdb)
     os.close(gdb_script_fd)
 
-    gdb_tool_path = os.path.join(g_android_ndk_path, 'prebuilt', 'windows-x86_64', 'bin' , 'gdb.exe')
-    #Attach to LLDB
-    lldb_process = subprocess.Popen(gdb_tool_path + " -x " + gdb_script_path, creationflags=subprocess.CREATE_NEW_CONSOLE)
-    while lldb_process.returncode is None:
+    #Attach to GDB
+    gbd_process = subprocess.Popen(g_gdb_tool + " -x " + gdb_script_path, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    while gbd_process.returncode is None:
         try:
-            lldb_process.communicate()
+            gbd_process.communicate()
         except KeyboardInterrupt:
-            print "haber que paso"
             pass
-
+        
+    os.unlink(gdb_script_path)
 
 if __name__ == "__main__":
     main()
