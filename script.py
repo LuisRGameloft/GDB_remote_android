@@ -32,7 +32,7 @@ def find_program(program, path, withext=True):
 
 if sys.argv[1:2] != ["--wakeup"]:
     print "Finding adb tool ..."
-    g_adb_tool                  = find_program("adb", os.environ['ADB_PATH'])
+    g_adb_tool                  = find_program("adb", os.path.join(os.environ['ADB_PATH'], 'platform-tools'))
     print "Finding jdb tool ..."
     g_jdb_tool                  = find_program("jdb", os.environ['JAVA_SDK_PATH'])
     print "Finding gdb tool ..."
