@@ -9,6 +9,7 @@ import sys
 import multiprocessing
 import tempfile
 import re
+import posixpath
 
 def find_program(program, path, withext=True):
     exts = [""]
@@ -39,6 +40,7 @@ if sys.argv[1:2] != ["--wakeup"]:
     g_gdb_tool                  = find_program("gdb", os.environ['ANDROID_NDK_PATH'])
     g_android_package           = os.environ['ANDROID_PACKAGE_ID']
     g_android_main_activity     = os.environ['MAIN_ACTIVITY']
+    g_current_working_path      = os.getcwd()
 
 
 def run_command(command):
@@ -77,7 +79,7 @@ def destroy_previous_session_debugger(task):
             PIDS.append(pid)
 
     if PIDS:
-        print "Destroying previous LLDB server sessions"
+        print "Destroying previous GDB server sessions"
         for pid in PIDS:
             print "Killing processes: " + pid
             command = g_adb_tool + " shell run-as " + g_android_package + " kill -9 " + pid
@@ -85,8 +87,6 @@ def destroy_previous_session_debugger(task):
 
 
 def start_jdb(adb_tool, jdb_tool, pid):
-    print "Starting jdb to unblock application."
-
     # Do setup stuff to keep ^C in the parent from killing us.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     
@@ -114,17 +114,14 @@ def start_jdb(adb_tool, jdb_tool, pid):
         line = jdb.stdout.readline()
         if line == "":
             break
-        print "jdb output: " + line.rstrip()
+        #print "jdb output: " + line.rstrip()
         if jdb_magic in line and not saw_magic_str:
             saw_magic_str = True
             time.sleep(0.3)
             jdb.stdin.write("exit\n")
     jdb.wait()
-    if saw_magic_str:
-        print "JDB finished unblocking application."
-    else:
-        print "error: did not find magic string in JDB output."
-
+    return 0
+    
 def main():
     if sys.argv[1:2] == ["--wakeup"]:
         return start_jdb(*sys.argv[2:])
@@ -164,6 +161,46 @@ def main():
     gdb_server_name = "{}-gdbserver".format(g_arch_device)
     
     destroy_previous_session_debugger(gdb_server_name)
+    
+    print "Getting main libraries to load to debugger ..."
+    root_working = os.path.join(g_current_working_path , g_arch_device)
+    is_64 = "64" in detectABI.lower()
+
+    required_files = []
+    libraries = ["libc.so", "libm.so", "libdl.so"]
+
+    if is_64:
+        required_files = ["/system/bin/app_process64", "/system/bin/linker64"]
+        library_path = "/system/lib64"
+    else:
+        required_files = ["/system/bin/linker"]
+        library_path = "/system/lib"
+
+    for library in libraries:
+        required_files.append(posixpath.join(library_path, library))
+
+    for required_file in required_files:
+        # os.path.join not used because joining absolute paths will pick the last one
+        local_path = os.path.realpath(root_working + required_file)
+        local_dirname = os.path.dirname(local_path)
+        if not os.path.isdir(local_dirname):
+            os.makedirs(local_dirname)
+        
+        command = g_adb_tool + ' pull ' + required_file + ' ' + local_path
+        stdout, stderr = run_command(command)
+
+    if not is_64:
+        destination = os.path.realpath(root_working + "/system/bin/app_process")
+        try:
+            command = g_adb_tool + ' pull /system/bin/app_process32 ' + destination
+            stdout, stderr = run_command(command)
+        except:
+            command = g_adb_tool + ' pull /system/bin/app_process ' + destination
+            stdout, stderr = run_command(command)
+
+    binary_path = os.path.join(root_working, "system", "bin", "app_process")
+    if is_64:
+        binary_path = os.path.join(root_working, "system", "bin", "app_process64")
     
     print "Install GDB files into device"
     
@@ -223,8 +260,24 @@ def main():
     stdout, stderr = run_command(command)
     
     #Create script_commands for LLDB
+    if sys.platform.startswith("win"):
+        # GDB expects paths to use forward slashes.
+        root_working = root_working.replace("\\", "/")
+        binary_path = binary_path.replace("\\", "/")
+
     command_working_gdb = "set osabi GNU/Linux\n"
-    command_working_gdb +="shell echo Connecting .. \r\n"
+    command_working_gdb += "file '{}'\n".format(binary_path)
+
+    solib_search_path = [root_working, "{}/system/bin".format(root_working)]
+    if is_64:
+        solib_search_path.append("{}/system/lib64".format(root_working))
+    else:
+        solib_search_path.append("{}/system/lib".format(root_working))
+    solib_search_path = os.pathsep.join(solib_search_path)
+    
+    command_working_gdb += "set solib-absolute-prefix {}\n".format(root_working)
+    command_working_gdb += "set solib-search-path {}\n".format(solib_search_path)
+    command_working_gdb += "shell echo Connecting .. \r\n"
     command_working_gdb += """
 python
 
@@ -253,9 +306,7 @@ python
 def start_jdb_to_unblock_app():
   import subprocess
   subprocess.Popen({})
-
 start_jdb_to_unblock_app()
-
 end
 """.format(repr(
             [
@@ -267,8 +318,6 @@ end
                 current_pid,
             ]))
     
-    command_working_gdb +="continue \r\n"
-
     #Create Tmp file
     gdb_script_fd, gdb_script_path = tempfile.mkstemp()
     os.write(gdb_script_fd, command_working_gdb)
