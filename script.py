@@ -148,14 +148,16 @@ def main():
 
     #default ABI
     g_arch_device = "arm"
+    g_detect_ABI = detectABI.lower().strip()
+
     #Select ABI 
-    if detectABI.lower() == 'arm64-v8a':
+    if g_detect_ABI == 'arm64-v8a':
         g_arch_device = 'arm64'
 
-    if detectABI.lower() == 'x86':
+    if g_detect_ABI == 'x86':
         g_arch_device = 'x86'
 
-    if detectABI.lower() == 'x86_64':
+    if g_detect_ABI == 'x86_64':
         g_arch_device = 'x86_64'
 
     gdb_server_name = "{}-gdbserver".format(g_arch_device)
@@ -164,7 +166,7 @@ def main():
     
     print "Getting main libraries to load to debugger ..."
     root_working = os.path.join(g_current_working_path , g_arch_device)
-    is_64 = "64" in detectABI.lower()
+    is_64 = "64" in g_detect_ABI
 
     required_files = []
     libraries = ["libc.so", "libm.so", "libdl.so"]
