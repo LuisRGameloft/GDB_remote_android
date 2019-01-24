@@ -28,20 +28,8 @@ def find_program(program, path, withext=True):
                 if os.path.isfile(full):
                     return full
 
-    print "Cannot find Program : " + program + " in path = " + path
+    print ("Cannot find Program : " + program + " in path = " + path)
     exit()
-
-if sys.argv[1:2] != ["--wakeup"]:
-    print "Finding adb tool ..."
-    g_adb_tool                  = find_program("adb", os.path.join(os.environ['ADB_PATH'], 'platform-tools'))
-    print "Finding jdb tool ..."
-    g_jdb_tool                  = find_program("jdb", os.environ['JAVA_SDK_PATH'])
-    print "Finding gdb tool ..."
-    g_gdb_tool                  = find_program("gdb", os.environ['ANDROID_NDK_PATH'])
-    g_android_package           = os.environ['ANDROID_PACKAGE_ID']
-    g_android_main_activity     = os.environ['MAIN_ACTIVITY']
-    g_current_working_path      = os.getcwd()
-
 
 def run_command(command):
     p = subprocess.Popen(
@@ -49,15 +37,41 @@ def run_command(command):
     stdout, stderr = p.communicate()
     exit_code = p.returncode
     if exit_code != 0:
-        print "Command : " + command 
-        print "Is not valid" 
-        print "if this error persist, please reboot device"
+        print ("=== Error ===\n") 
+        print ("Command : " + command) 
+        print ("Output : " + stdout) 
+        print ("Output Err : " + stderr) 
+        print ("if this error persist, please reboot device")
         exit()
 
     return stdout, stderr
 
-def destroy_previous_session_debugger(task):
-    command = g_adb_tool + " shell ps"
+def get_pid_task(task, adb_tool):
+    command = adb_tool + " shell ps"
+    stdout, stderr = run_command(command)
+
+    lines = re.split(r'[\r\n]+', stdout.replace("\r", "").rstrip())
+    columns = lines.pop(0).split()
+    
+    try:
+        pid_column = columns.index("PID")
+    except ValueError:
+        pid_column = 1
+
+    processes = dict()
+    while lines:
+        columns = lines.pop().split()
+        process_name = columns[-1]
+        pid = columns[pid_column]
+        if process_name in processes:
+            processes[process_name].append(pid)
+        else:
+            processes[process_name] = [pid]
+    
+    return processes.get(task, [])
+
+def destroy_previous_session_debugger(task, adbtool, package):
+    command = adbtool + " shell ps"
     stdout, stderr = run_command(command)
 
     lines = re.split(r'[\r\n]+', stdout.replace("\r", "").rstrip())
@@ -79,12 +93,11 @@ def destroy_previous_session_debugger(task):
             PIDS.append(pid)
 
     if PIDS:
-        print "Destroying previous GDB server sessions"
+        print ("Destroying previous GDB server sessions")
         for pid in PIDS:
-            print "Killing processes: " + pid
-            command = g_adb_tool + " shell run-as " + g_android_package + " kill -9 " + pid
+            print ("Killing processes: " + pid)
+            command = adbtool + " shell run-as " + package + " kill -9 " + pid
             stdout, stderr = run_command(command)
-
 
 def start_jdb(adb_tool, jdb_tool, pid):
     # Do setup stuff to keep ^C in the parent from killing us.
@@ -126,17 +139,29 @@ def main():
     if sys.argv[1:2] == ["--wakeup"]:
         return start_jdb(*sys.argv[2:])
 
+    print ("Finding adb tool ...")
+    g_adb_tool                  = find_program("adb", os.path.join(os.environ['ADB_PATH'], 'platform-tools'))
+    print ("Finding jdb tool ...")
+    g_jdb_tool                  = find_program("jdb", os.environ['JAVA_SDK_PATH'])
+    print ("Finding gdb tool ...")
+    g_ndk_path                  = os.environ['ANDROID_NDK_PATH']
+    g_gdb_tool                  = find_program("gdb", g_ndk_path)
+    
+    g_android_package           = os.environ['ANDROID_PACKAGE_ID']
+    g_android_main_activity     = os.environ['MAIN_ACTIVITY']
+    g_current_working_path      = os.path.dirname(os.path.realpath(__file__))
+
     #Check if device is connected
     command = g_adb_tool + " devices"
     stdout, stderr = run_command(command)
 
     lines = re.split(r'[\r\n]+', stdout.replace("\r", "").rstrip())
     if len(lines) < 2:
-        print "Error: device disconnected!"
+        print ("Error: device disconnected!")
         exit()
     
     if not "device" in lines[1]:
-        print "Error: device disconnected!"
+        print ("Error: device disconnected!")
         exit()
 
     #Detect ABI's device
@@ -144,6 +169,7 @@ def main():
     command = g_adb_tool + ' shell getprop ro.product.cpu.abi '
     stdout, stderr = run_command(command)
 
+    #detect ABI
     detectABI = stdout
 
     #default ABI
@@ -162,9 +188,9 @@ def main():
 
     gdb_server_name = "{}-gdbserver".format(g_arch_device)
     
-    destroy_previous_session_debugger(gdb_server_name)
+    destroy_previous_session_debugger(gdb_server_name, g_adb_tool, g_android_package)
     
-    print "Getting main libraries to load to debugger ..."
+    print ("Getting main libraries to load to debugger ...")
     root_working = os.path.join(g_current_working_path , g_arch_device)
     is_64 = "64" in g_detect_ABI
 
@@ -208,10 +234,10 @@ def main():
     
     #Install GDB Server
     gdb_subfolder_path = "android-{}".format(g_arch_device)
-    gdb_server_path = find_program("gdbserver", os.path.join(os.environ['ANDROID_NDK_PATH'], 'prebuilt', gdb_subfolder_path), False)
+    gdb_server_path = find_program("gdbserver", os.path.join(g_ndk_path, 'prebuilt', gdb_subfolder_path), False)
     command = g_adb_tool + ' push ' + gdb_server_path + ' /data/local/tmp/' + gdb_server_name
     stdout, stderr = run_command(command)
-    
+
     #Stop Current APP session
     command = g_adb_tool + ' shell am force-stop ' + g_android_package
     stdout, stderr = run_command(command)
@@ -224,14 +250,14 @@ def main():
     time.sleep(1)
 
     # Get Current PID for current debugger session
-    command = g_adb_tool + " shell ps | grep " + g_android_package
-    stdout, stderr = run_command(command)
-    str = stdout
-    if len(str) is 0:
-        print "Not instance of " + g_android_package + " was found"
-        exit()
-    current_pid = filter(None, str.split(" "))[1]
+    pids = get_pid_task(g_android_package, g_adb_tool)
+    if len(pids) == 0:
+        error("Failed to find running process '{}'".format(g_android_package))
+    if len(pids) > 1:
+        error("Multiple running processes named '{}'".format(g_android_package))
     
+    current_pid = pids[0]
+
     #check if exist folder /data/data/<package-id>/gdb 
     command = g_adb_tool + " shell run-as " + g_android_package + " sh -c 'if [ -d \"/data/data/" + g_android_package + "/gdb\" ]; then echo \"1\"; else echo \"0\"; fi;'"
     stdout, stderr = run_command(command)
@@ -269,16 +295,18 @@ def main():
 
     command_working_gdb = "set osabi GNU/Linux\n"
     command_working_gdb += "file '{}'\n".format(binary_path)
-
-    solib_search_path = [root_working, "{}/system/bin".format(root_working)]
+    
+    g_solib_search_path = []
+    g_solib_search_path.append(root_working)
+    g_solib_search_path.append("{}/system/bin".format(root_working))
     if is_64:
-        solib_search_path.append("{}/system/lib64".format(root_working))
+        g_solib_search_path.append("{}/system/lib64".format(root_working))
     else:
-        solib_search_path.append("{}/system/lib".format(root_working))
-    solib_search_path = os.pathsep.join(solib_search_path)
+        g_solib_search_path.append("{}/system/lib".format(root_working))
+    g_solib_search_path = os.pathsep.join(g_solib_search_path)
     
     command_working_gdb += "set solib-absolute-prefix {}\n".format(root_working)
-    command_working_gdb += "set solib-search-path {}\n".format(solib_search_path)
+    command_working_gdb += "set solib-search-path {}\n".format(g_solib_search_path)
     command_working_gdb += "shell echo Connecting .. \r\n"
     command_working_gdb += """
 python
@@ -319,7 +347,7 @@ end
                 g_jdb_tool,
                 current_pid,
             ]))
-    
+
     #Create Tmp file
     gdb_script_fd, gdb_script_path = tempfile.mkstemp()
     os.write(gdb_script_fd, command_working_gdb)
