@@ -121,17 +121,28 @@ def start_jdb(adb_tool, jdb_tool, pid):
     # start polling for a Java debugger (e.g. every 200ms). We need to wait
     # a while longer then so that the app notices jdb.
     jdb_magic = "__has_started__"
-    jdb.stdin.write('print "{}"\n'.format(jdb_magic))
+    text_signal = 'print "{}"\n'.format(jdb_magic)
+    if sys.version_info[0] == 3:
+        text_signal = bytes(text_signal, 'utf-8')
+
+    jdb.stdin.write(text_signal)
     saw_magic_str = False
     while True:
         line = jdb.stdout.readline()
+        if sys.version_info[0] == 3:
+            line = line.decode("utf-8")
+
         if line == "":
             break
         #print "jdb output: " + line.rstrip()
         if jdb_magic in line and not saw_magic_str:
             saw_magic_str = True
             time.sleep(0.3)
-            jdb.stdin.write("exit\n")
+            exit_signal = "exit\n"
+            if sys.version_info[0] == 3:
+                exit_signal = bytes(exit_signal, 'utf-8')
+
+            jdb.stdin.write(exit_signal)
     jdb.wait()
     return 0
     
