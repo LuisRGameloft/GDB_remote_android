@@ -360,7 +360,7 @@ start_jdb_to_unblock_app()
 end
 """.format(repr(
             [
-                "python",
+                sys.executable,
                 os.path.realpath(__file__),
                 "--wakeup",
                 g_adb_tool,
