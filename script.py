@@ -175,6 +175,15 @@ def main():
         print ("Error: device disconnected!")
         exit()
 
+    #Detect if App is debuggeable
+    command = g_adb_tool + " shell run-as " + g_android_package + " echo yes"
+    p = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = p.communicate()
+    if ("is not debuggable" in stderr) or ("is not debuggable" in stdout):
+        print ("Your APK is not debuggable")
+        exit()
+
     #Detect ABI's device
     #Stop Current APP session
     command = g_adb_tool + ' shell getprop ro.product.cpu.abi '
